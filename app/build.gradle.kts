@@ -81,6 +81,9 @@ dependencies {
     implementation("com.github.PhilJay:MPAndroidChart:3.1.0")
     implementation(libs.navigation.fragment)
 
+    implementation("org.osmdroid:osmdroid-android:6.1.16")
+    implementation(libs.osmdroid.android) // OpenStreetMap Library
+
     // Testing dependencies
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

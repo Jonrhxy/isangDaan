@@ -1,6 +1,6 @@
 <resources>
     <!-- GET GTART TO LOGIN -->
-    <string name="app_name">CVERDETOTOO</string>
+    <string name="app_name">C-Verde 2.0</string>
     <string name="getstartbtn">\n</string>
     <string name="Email_Uname">Email/Username</string>
     <string name="getstart">Click anywhere to start!</string>
@@ -9,6 +9,16 @@
     <string name="login">Login</string>
     <string name="reg">New to C-Verde? SignUp</string>
     <string name="logo">\n</string>
+
+    <!--SPINNER-->
+
+    <string-array name="transport_modes">
+        <item>Car</item>
+        <item>Bus</item>
+        <item>Motorcycle</item>
+        <item>Jeepney</item>
+        <item>Truck</item>
+    </string-array>
 
     <!-- HOMEPAGE -->
     <string name="vid">Videos</string>

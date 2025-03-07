@@ -25,6 +25,7 @@ playServicesLocation = "21.3.0"
 firebaseStorage = "21.0.1"
 firebaseMessaging = "24.1.0"
 navigationFragment = "2.8.8"
+osmdroid = "6.1.16"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -51,6 +52,7 @@ mlkit-image-labeling = { module = "com.google.mlkit:image-labeling", version.ref
 firebase-storage = { group = "com.google.firebase", name = "firebase-storage", version.ref = "firebaseStorage" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging", version.ref = "firebaseMessaging" }
 navigation-fragment = { group = "androidx.navigation", name = "navigation-fragment", version.ref = "navigationFragment" }
+osmdroid-android = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 
 
 [plugins]

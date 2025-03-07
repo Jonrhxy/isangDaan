@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent">
+
+    <!-- NPC Image at bottom-right, partially transparent -->
+    <ImageView
+        android:id="@+id/npcImage"
+        android:layout_width="120dp"
+        android:layout_height="200dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="16dp"
+        android:alpha="0.7"
+        android:scaleType="fitCenter"
+        android:src="@drawable/npc_forest"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Chat bubble at bottom-left -->
+    <LinearLayout
+        android:id="@+id/chatBubble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:background="@drawable/dialog_rounded_shape"
+        app:layout_constraintBottom_toBottomOf="@+id/npcImage"
+        app:layout_constraintEnd_toStartOf="@+id/npcImage"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="8dp">
+
+        <!-- Animated text from the NPC -->
+        <TextView
+            android:id="@+id/npcMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@android:color/black"
+            android:textSize="16sp"
+            android:gravity="center"
+            android:maxWidth="250dp"
+            android:layout_margin="8dp" />
+
+        <!-- OK button to close the dialog -->
+        <Button
+            android:id="@+id/npcCloseButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OK"
+            android:textColor="@android:color/black"
+            android:layout_gravity="center_horizontal" />
+
+    </LinearLayout>
+
+
+
+</androidx.constraintlayout.widget.ConstraintLayout>

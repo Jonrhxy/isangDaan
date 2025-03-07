@@ -1,10 +1,317 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
+    android:id="@+id/battleEcoRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@drawable/background1"
     tools:context=".BattleEcoActivity">
+
+    <!-- ====== Timer (top-center) ====== -->
+    <TextView
+        android:id="@+id/timerText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="⏰ 10:00"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <ImageButton
+        android:id="@+id/pauseButton"
+        android:layout_width="86dp"
+        android:layout_height="58dp"
+        android:layout_marginTop="1dp"
+        android:adjustViewBounds="true"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Pause"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_pause"
+        app:layout_constraintEnd_toEndOf="@id/timerText"
+        app:layout_constraintStart_toStartOf="@id/timerText"
+        app:layout_constraintTop_toBottomOf="@id/timerText" />
+
+
+    <!-- ====== Player Stats (top-left) ====== -->
+    <TextView
+        android:id="@+id/playerHealthText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="❤️ 100"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginTop="16dp"
+        android:layout_marginStart="16dp" />
+
+    <TextView
+        android:id="@+id/playerShieldText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🛡️ 0"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/playerHealthText"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginTop="4dp"
+        android:layout_marginStart="16dp" />
+
+    <TextView
+        android:id="@+id/playerEnergyText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="⚡ 0"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/playerShieldText"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginTop="4dp"
+        android:layout_marginStart="16dp" />
+
+    <!-- ====== AI Stats (top-right) ====== -->
+    <TextView
+        android:id="@+id/computerHealthText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="100 ❤️"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp" />
+
+    <TextView
+        android:id="@+id/computerShieldText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0 🛡️"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/computerHealthText"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="4dp"
+        android:layout_marginEnd="16dp" />
+
+    <TextView
+        android:id="@+id/computerEnergyText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0 ⚡"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/computerShieldText"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="4dp"
+        android:layout_marginEnd="16dp" />
+
+    <!-- ====== Player Character (center-left) ====== -->
+    <ImageView
+        android:id="@+id/playerCharacterImage"
+        android:layout_width="89dp"
+        android:layout_height="153dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="16dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/main_character"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.5" />
+
+    <!-- ====== AI Character (center-right) ====== -->
+    <ImageView
+        android:id="@+id/aiCharacterImage"
+        android:layout_width="89dp"
+        android:layout_height="153dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/boss1"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="16dp"
+        app:layout_constraintVertical_bias="0.5" />
+
+    <!-- ====== Player Drawn Card (invisible by default) ====== -->
+
+    <!-- ====== AI Drawn Card (invisible by default) ====== -->
+
+    <!-- ====== Battle Log (bottom center) ====== -->
+
+    <ImageView
+        android:id="@+id/playerDrawnCard"
+        android:layout_width="127dp"
+        android:layout_height="182dp"
+        android:elevation="10dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/placeholder_card"
+        android:visibility="invisible"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.19"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.497" />
+
+    <ImageView
+        android:id="@+id/aiDrawnCard"
+        android:layout_width="127dp"
+        android:layout_height="182dp"
+        android:elevation="10dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/placeholder_card"
+        android:visibility="invisible"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.799"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.497" />
+
+    <TextView
+        android:id="@+id/battleLogText"
+        android:layout_width="398dp"
+        android:layout_height="62dp"
+        android:layout_margin="8dp"
+        android:background="#88000000"
+        android:padding="8dp"
+        android:text="Battle log..."
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- ====== Hand Layout (above battle log) ====== -->
+    <LinearLayout
+        android:id="@+id/handLayout"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_margin="8dp"
+        app:layout_constraintBottom_toTopOf="@id/battleLogText"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- ====== Skip Turn Button (bottom left) ====== -->
+    <Button
+        android:id="@+id/skipTurnButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Skip Turn"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginBottom="16dp"
+        android:layout_marginStart="16dp" />
+
+    <!-- ====== Pause Panel (Overlay) ====== -->
+    <LinearLayout
+        android:id="@+id/pausePanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#AA000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="9999dp"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="@drawable/dialog_rounded_shape"
+            android:gravity="center">
+
+            <Button
+                android:id="@+id/resumeButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Resume"
+                android:layout_margin="8dp" />
+
+            <Button
+                android:id="@+id/muteButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mute"
+                android:layout_margin="8dp" />
+
+            <Button
+                android:id="@+id/instructionsButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Instructions"
+                android:layout_margin="8dp" />
+
+            <!-- Restart Button inside the Pause Panel -->
+            <Button
+                android:id="@+id/restartButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Restart"
+                android:layout_margin="8dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ====== Instructions Panel (Overlay) ====== -->
+    <LinearLayout
+        android:id="@+id/instructionsPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#AA000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="9999dp"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="@drawable/dialog_rounded_shape"
+            android:gravity="center">
+
+            <TextView
+                android:id="@+id/instructionsText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Instructions:\n1. Draw cards to attack or defend.\n2. Use energy wisely.\n3. Defeat all bosses within 10 minutes!"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="16dp"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/backButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Back"
+                android:layout_margin="8dp" />
+        </LinearLayout>
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
