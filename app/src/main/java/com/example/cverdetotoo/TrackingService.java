@@ -33,10 +33,10 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.List;
 
 public class TrackingService extends Service implements LocationListener {
 
@@ -50,15 +50,15 @@ public class TrackingService extends Service implements LocationListener {
     private static final float MAX_DISTANCE_DELTA = 50f;
     private static final float MIN_DISTANCE_DELTA = 3f;
 
-    // SharedPreferences keys
+    // SharedPreferences keys (common file for both classes)
     private static final String PREFS_NAME = "session_prefs";
     private static final String KEY_TOTAL_DISTANCE = "total_distance";
-    private static final String KEY_TOTAL_ACTIVE_TIME = "total_active_time";
+    private static final String KEY_TOTAL_ACTIVE_TIME = "accumulated_active_time";
     private static final String KEY_LAST_DATE = "lastDate";
     private static final String KEY_SELECTED_MODE_INDEX = "selected_mode_index";
     private static final String KEY_SESSION_ID = "session_id";
 
-    // Emission factors (kg CO₂ per km)
+    // Emission factors
     private static final double EMISSION_FACTOR_CAR = 0.25;
     private static final double EMISSION_FACTOR_BUS = 0.08;
     private static final double EMISSION_FACTOR_MOTORCYCLE = 0.10;
@@ -71,9 +71,9 @@ public class TrackingService extends Service implements LocationListener {
     // Tracking fields
     private LocationManager locationManager;
     private List<Location> locations = new ArrayList<>();
-    private float totalDistance = 0;
-    private long startTime = 0;
-    private long totalActiveTime = 0;
+    private float totalDistance = 0;   // in meters
+    private long startTime = 0;        // when tracking starts (ms)
+    private long totalActiveTime = 0;  // accumulated active time (ms)
     private Handler handler = new Handler();
 
     // Foreground notification
@@ -86,7 +86,7 @@ public class TrackingService extends Service implements LocationListener {
     private FirebaseFirestore db;
     private String displayName = "unknown";
 
-    // Daily session id (yyyyMMdd)
+    // Daily session id (formatted as yyyyMMdd)
     private String currentSessionId = null;
     private boolean isRewardGiven = false;
 
@@ -105,12 +105,13 @@ public class TrackingService extends Service implements LocationListener {
             currentSessionId = new SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(new Date());
             SharedPreferences.Editor editor = prefs.edit();
             editor.putString(KEY_SESSION_ID, currentSessionId);
-            editor.apply();
+            editor.commit(); // Use commit() for synchronous saving
 
             FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
             if (currentUser != null && currentUser.getDisplayName() != null) {
                 displayName = currentUser.getDisplayName();
             }
+            Log.d(TAG, "onCreate: Using displayName=" + displayName);
 
             db = FirebaseFirestore.getInstance();
 
@@ -132,7 +133,7 @@ public class TrackingService extends Service implements LocationListener {
             };
             handler.post(notificationUpdater);
         } catch (Exception e) {
-            Log.e(TAG, "Error in onCreate: " + e.getMessage());
+            Log.e(TAG, "Error in TrackingService onCreate: " + e.getMessage());
         }
     }
 
@@ -166,7 +167,7 @@ public class TrackingService extends Service implements LocationListener {
 
                 SharedPreferences.Editor editor = prefs.edit();
                 editor.putLong(KEY_LAST_DATE, System.currentTimeMillis());
-                editor.apply();
+                editor.commit();
             } else {
                 Log.d(TAG, "Same day in Service—no reset needed.");
             }
@@ -178,9 +179,7 @@ public class TrackingService extends Service implements LocationListener {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             String channelName = "Walking Tracker";
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_LOW
-            );
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_LOW);
             channel.setDescription("Tracking your walk in background");
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
@@ -193,14 +192,12 @@ public class TrackingService extends Service implements LocationListener {
         try {
             Intent notificationIntent = new Intent(this, GPS.class);
             notificationIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-
             PendingIntent pendingIntent = PendingIntent.getActivity(
                     this,
                     0,
                     notificationIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
-
             notificationBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
                     .setContentTitle("Walking Tracker")
                     .setContentText("Initializing...")
@@ -229,9 +226,7 @@ public class TrackingService extends Service implements LocationListener {
 
             double distanceKm = totalDistance / 1000.0;
             int steps = (int) (distanceKm * STEPS_PER_KM);
-            if (steps >= GOAL_STEPS) {
-                steps = GOAL_STEPS;
-            }
+            if (steps >= GOAL_STEPS) { steps = GOAL_STEPS; }
 
             double emissionFactor;
             String modeText;
@@ -259,17 +254,14 @@ public class TrackingService extends Service implements LocationListener {
                 notificationLayout.setTextViewText(R.id.textCO2, "");
             } else {
                 notificationLayout.setTextViewText(R.id.textTime, "Time: " + timeString);
-                notificationLayout.setTextViewText(R.id.textDistance,
-                        "Distance: " + String.format(Locale.getDefault(), "%.2f km", distanceKm));
+                notificationLayout.setTextViewText(R.id.textDistance, "Distance: " + String.format(Locale.getDefault(), "%.2f km", distanceKm));
                 notificationLayout.setTextViewText(R.id.textSteps, "Steps: " + steps);
-                notificationLayout.setTextViewText(R.id.textCO2,
-                        "CO₂: " + String.format(Locale.getDefault(), "%.2f kg", co2Saved));
+                notificationLayout.setTextViewText(R.id.textCO2, "CO₂: " + String.format(Locale.getDefault(), "%.2f kg", co2Saved));
             }
-
             notificationBuilder.setCustomContentView(notificationLayout);
             startForeground(NOTIFICATION_ID, notificationBuilder.build());
 
-            // Broadcast to the activity
+            // Broadcast update to UI
             Intent updateIntent = new Intent("com.example.walktracker.TRACKING_UPDATE");
             updateIntent.putExtra("elapsedTime", elapsedTime);
             updateIntent.putExtra("totalDistance", totalDistance);
@@ -282,20 +274,14 @@ public class TrackingService extends Service implements LocationListener {
         }
     }
 
-    /**
-     * Merge partial data into Firestore so the activity can see updated totals.
-     * Include accumulatedActiveTime for resume. Also includes co2Comparison fields.
-     */
     private void updateRealtimeFirestore() {
         try {
             double distanceKm = totalDistance / 1000.0;
             int steps = (int) (distanceKm * STEPS_PER_KM);
-
             long elapsedTime = totalActiveTime;
             if (startTime > 0) {
                 elapsedTime += (System.currentTimeMillis() - startTime);
             }
-
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             int savedModeIndex = prefs.getInt(KEY_SELECTED_MODE_INDEX, 0);
             selectedMode = mapSpinnerIndexToMode(savedModeIndex);
@@ -311,28 +297,22 @@ public class TrackingService extends Service implements LocationListener {
             }
             double co2Saved = distanceKm * emissionFactor;
 
-            // Also compute comparison fields
             String co2ComparisonBus = "CO₂ saved from walk compared to bus: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
+                    String.format("%.2fkg", distanceKm * 0.08);
             String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
+                    String.format("%.2fkg", distanceKm * 0.15);
             String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
+                    String.format("%.2fkg", distanceKm * 0.10);
             String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
+                    String.format("%.2fkg", distanceKm * 0.30);
 
             Map<String, Object> partialData = new HashMap<>();
             partialData.put("distanceSoFarKm", String.format(Locale.getDefault(), "%.2f", distanceKm));
-            partialData.put("time", String.format(Locale.getDefault(), "%02d:%02d",
-                    (int)(elapsedTime / 60000), (int)((elapsedTime / 1000) % 60)));
+            partialData.put("time", String.format(Locale.getDefault(), "%02d:%02d", (int)(elapsedTime / 60000), (int)((elapsedTime / 1000) % 60)));
             partialData.put("co2Saved", co2Saved);
             partialData.put("stepsSoFar", steps);
             partialData.put("timestamp", FieldValue.serverTimestamp());
-
-            // Include raw active time
             partialData.put("accumulatedActiveTime", elapsedTime);
-
-            // Comparison fields
             partialData.put("co2ComparisonBus", co2ComparisonBus);
             partialData.put("co2ComparisonJeepney", co2ComparisonJeepney);
             partialData.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
@@ -343,9 +323,7 @@ public class TrackingService extends Service implements LocationListener {
                     .collection("trackingwalk")
                     .document(currentSessionId)
                     .set(partialData, SetOptions.merge())
-                    .addOnFailureListener(e -> {
-                        Log.e(TAG, "Realtime Firestore update failed: " + e.getMessage());
-                    });
+                    .addOnFailureListener(e -> Log.e(TAG, "Realtime Firestore update failed: " + e.getMessage()));
         } catch (Exception e) {
             Log.e(TAG, "Error in updateRealtimeFirestore: " + e.getMessage());
         }
@@ -389,14 +367,10 @@ public class TrackingService extends Service implements LocationListener {
         return null;
     }
 
-    /**
-     * If location changes, update totalDistance if valid.
-     */
     @Override
     public void onLocationChanged(@NonNull Location location) {
         try {
             if (location.hasAccuracy() && location.getAccuracy() > ACCURACY_THRESHOLD) return;
-
             if (!locations.isEmpty()) {
                 Location lastLocation = locations.get(locations.size() - 1);
                 float distanceDelta = lastLocation.distanceTo(location);
@@ -416,16 +390,17 @@ public class TrackingService extends Service implements LocationListener {
 
     private void saveServiceData() {
         try {
-            SharedPreferences prefs = getSharedPreferences("service_prefs", MODE_PRIVATE);
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             SharedPreferences.Editor editor = prefs.edit();
-            editor.putFloat("service_distance", totalDistance);
-
+            editor.putFloat(KEY_TOTAL_DISTANCE, totalDistance);
             long currentActiveTime = totalActiveTime;
             if (startTime > 0) {
                 currentActiveTime += (System.currentTimeMillis() - startTime);
             }
-            editor.putLong("service_active_time", currentActiveTime);
-            editor.apply();
+            editor.putLong(KEY_TOTAL_ACTIVE_TIME, currentActiveTime);
+            editor.commit(); // Use commit() to ensure immediate saving
+            Log.d(TAG, "saveServiceData: totalDistance=" + totalDistance
+                    + ", totalActiveTime=" + currentActiveTime);
         } catch (Exception e) {
             Log.e(TAG, "Error saving service data: " + e.getMessage());
         }
@@ -433,22 +408,19 @@ public class TrackingService extends Service implements LocationListener {
 
     private void loadServiceData() {
         try {
-            SharedPreferences prefs = getSharedPreferences("service_prefs", MODE_PRIVATE);
-            totalDistance = prefs.getFloat("service_distance", 0f);
-            totalActiveTime = prefs.getLong("service_active_time", 0L);
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            totalDistance = prefs.getFloat(KEY_TOTAL_DISTANCE, 0f);
+            totalActiveTime = prefs.getLong(KEY_TOTAL_ACTIVE_TIME, 0L);
+            Log.d(TAG, "loadServiceData: totalDistance=" + totalDistance
+                    + ", totalActiveTime=" + totalActiveTime);
         } catch (Exception e) {
             Log.e(TAG, "Error loading service data: " + e.getMessage());
         }
     }
 
-    /**
-     * If step goal is reached => store final record => update highScore.
-     * Also merges comparison fields so the doc has them.
-     */
     private void storeTrackingRecordIfGoalReached() {
         try {
             if (isRewardGiven) return;
-
             double distanceKm = totalDistance / 1000.0;
             int steps = (int) (distanceKm * STEPS_PER_KM);
             if (steps < GOAL_STEPS) return;
@@ -474,41 +446,28 @@ public class TrackingService extends Service implements LocationListener {
             String modeText;
             switch (selectedMode) {
                 case CAR:
-                    emissionFactor = EMISSION_FACTOR_CAR;
-                    modeText = "car";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_CAR; modeText = "car"; break;
                 case BUS:
-                    emissionFactor = EMISSION_FACTOR_BUS;
-                    modeText = "bus";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_BUS; modeText = "bus"; break;
                 case MOTORCYCLE:
-                    emissionFactor = EMISSION_FACTOR_MOTORCYCLE;
-                    modeText = "motorcycle";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_MOTORCYCLE; modeText = "motorcycle"; break;
                 case JEEPNEY:
-                    emissionFactor = EMISSION_FACTOR_JEEPNEY;
-                    modeText = "jeepney";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_JEEPNEY; modeText = "jeepney"; break;
                 case TRUCK:
-                    emissionFactor = EMISSION_FACTOR_TRUCK;
-                    modeText = "truck";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_TRUCK; modeText = "truck"; break;
                 default:
-                    emissionFactor = EMISSION_FACTOR_CAR;
-                    modeText = "car";
-                    break;
+                    emissionFactor = EMISSION_FACTOR_CAR; modeText = "car"; break;
             }
             double currentCo2Saved = distanceKm * emissionFactor;
 
-            // Also compute comparison fields
             String co2ComparisonBus = "CO₂ saved from walk compared to bus: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
+                    String.format("%.2fkg", distanceKm * 0.08);
             String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
+                    String.format("%.2fkg", distanceKm * 0.15);
             String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
+                    String.format("%.2fkg", distanceKm * 0.10);
             String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " +
-                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
+                    String.format("%.2fkg", distanceKm * 0.30);
 
             Map<String, Object> data = new HashMap<>();
             data.put("distanceSoFarKm", distanceString);
@@ -518,11 +477,7 @@ public class TrackingService extends Service implements LocationListener {
             data.put("stepsSoFar", steps);
             data.put("pointsEarned", pointsEarned);
             data.put("timestamp", FieldValue.serverTimestamp());
-
-            // Also store raw active time
             data.put("accumulatedActiveTime", elapsedTime);
-
-            // Comparison fields
             data.put("co2ComparisonBus", co2ComparisonBus);
             data.put("co2ComparisonJeepney", co2ComparisonJeepney);
             data.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
@@ -538,9 +493,7 @@ public class TrackingService extends Service implements LocationListener {
                                 .document(displayName)
                                 .update("highScore", FieldValue.increment(pointsEarned));
                     })
-                    .addOnFailureListener(e -> {
-                        Log.e(TAG, "Failed to update tracking record on goal: " + e.getMessage());
-                    });
+                    .addOnFailureListener(e -> Log.e(TAG, "Failed to update tracking record on goal: " + e.getMessage()));
         } catch (Exception e) {
             Log.e(TAG, "Error in storeTrackingRecordIfGoalReached: " + e.getMessage());
         }
@@ -549,4 +502,5 @@ public class TrackingService extends Service implements LocationListener {
     @Override public void onStatusChanged(String provider, int status, android.os.Bundle extras) {}
     @Override public void onProviderEnabled(@NonNull String provider) {}
     @Override public void onProviderDisabled(@NonNull String provider) {}
+
 }
