@@ -14,14 +14,13 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Shader;
-import android.graphics.drawable.BitmapDrawable;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
-import android.view.MotionEvent;
+import android.util.Log;
 import android.view.View;
 import android.view.Window;
 import android.widget.AdapterView;
@@ -40,15 +39,16 @@ import androidx.core.content.ContextCompat;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.SetOptions;
 
 import org.osmdroid.api.IGeoPoint;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
-import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
 import org.osmdroid.views.overlay.ScaleBarOverlay;
 import org.osmdroid.views.overlay.compass.CompassOverlay;
@@ -67,6 +67,8 @@ import java.util.Map;
 
 public class GPS extends AppCompatActivity implements LocationListener {
 
+    private static final String TAG = "GPS";
+
     // Constants
     private static final int REQUEST_LOCATION_PERMISSION = 1;
     private static final int STEPS_PER_KM = 1316;
@@ -83,6 +85,7 @@ public class GPS extends AppCompatActivity implements LocationListener {
     private static final String KEY_ACCUMULATED_TIME = "accumulated_active_time";
     private static final String KEY_LAST_DATE = "lastDate";
     private static final String KEY_SELECTED_MODE_INDEX = "selected_mode_index";
+    private static final String KEY_SESSION_ID = "session_id"; // daily doc ID (yyyyMMdd)
 
     // Emission factors (kg CO₂ per km)
     private static final double EMISSION_FACTOR_CAR = 0.25;
@@ -93,11 +96,12 @@ public class GPS extends AppCompatActivity implements LocationListener {
 
     // Tracking states and transport modes
     private enum TrackingState { STOPPED, RUNNING, PAUSED }
-    private TrackingState trackingState = TrackingState.STOPPED;
     public enum TransportMode { CAR, BUS, MOTORCYCLE, JEEPNEY, TRUCK }
+
+    private TrackingState trackingState = TrackingState.STOPPED;
     private TransportMode selectedMode = TransportMode.CAR; // default
 
-    // UI and map components
+    // UI
     private MapView mapView;
     private MyLocationNewOverlay locationOverlay;
     private Polyline polyline;
@@ -111,40 +115,52 @@ public class GPS extends AppCompatActivity implements LocationListener {
     // Tracking variables
     private List<Location> locations = new ArrayList<>();
     private float totalDistance = 0;
-    private long accumulatedActiveTime = 0;
+    private long accumulatedActiveTime = 0; // store raw active time in ms
     private long sessionStartTime = 0;
     private boolean isBadgePopupShown = false;
-    private boolean isRewardGiven = false; // Ensure reward is given only once per session
 
-    // Firestore and user identification
+    // Daily session ID (yyyyMMdd)
+    private String currentSessionId = null;
+
+    // Firestore
     private FirebaseFirestore db;
     private String displayName = "unknown";
 
-    // BroadcastReceiver for receiving tracking updates from the foreground service.
-    private BroadcastReceiver trackingUpdateReceiver = new BroadcastReceiver() {
+    // Flags for Firestore record
+    private boolean recordExistsInFirestore = false;
+    private boolean dailyRecordInitialized = false;
+
+    // BroadcastReceiver for updates from TrackingService
+    private final BroadcastReceiver trackingUpdateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            long elapsedTime = intent.getLongExtra("elapsedTime", accumulatedActiveTime);
-            float distance = intent.getFloatExtra("totalDistance", totalDistance);
-            int steps = intent.getIntExtra("steps", 0);
-            double co2Saved = intent.getDoubleExtra("co2Saved", 0.0);
-            String modeText = intent.getStringExtra("modeText");
+            try {
+                long elapsedTime = intent.getLongExtra("elapsedTime", accumulatedActiveTime);
+                float distance = intent.getFloatExtra("totalDistance", totalDistance);
+                int steps = intent.getIntExtra("steps", 0);
+                double co2Saved = intent.getDoubleExtra("co2Saved", 0.0);
+                String modeText = intent.getStringExtra("modeText");
 
-            accumulatedActiveTime = elapsedTime;
-            totalDistance = distance;
+                accumulatedActiveTime = elapsedTime;
+                totalDistance = distance;
 
-            int totalSeconds = (int) (elapsedTime / 1000);
-            int minutes = totalSeconds / 60;
-            int seconds = totalSeconds % 60;
-            String timeString = String.format("%02d:%02d", minutes, seconds);
+                int totalSeconds = (int) (elapsedTime / 1000);
+                int minutes = totalSeconds / 60;
+                int seconds = totalSeconds % 60;
+                String timeString = String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds);
 
-            double distanceKm = distance / 1000.0;
-            String distanceString = String.format("%.2f", distanceKm);
+                double distanceKm = distance / 1000.0;
+                String distanceString = String.format(Locale.getDefault(), "%.2f", distanceKm);
 
-            textTimeValue.setText(timeString);
-            textDistanceValue.setText(distanceString);
-            textStepsValue.setText(String.valueOf(steps));
-            textCarbonEmission.setText(String.format("Walking saved %.2f kg CO₂ vs. using a %s.", co2Saved, modeText));
+                textTimeValue.setText(timeString);
+                textDistanceValue.setText(distanceString);
+                textStepsValue.setText(String.valueOf(steps));
+                textCarbonEmission.setText(
+                        String.format(Locale.getDefault(),
+                                "Walking saved %.2f kg CO₂ vs. using a %s.", co2Saved, modeText));
+            } catch (Exception e) {
+                Log.e(TAG, "Error in trackingUpdateReceiver: " + e.getMessage());
+            }
         }
     };
 
@@ -152,37 +168,47 @@ public class GPS extends AppCompatActivity implements LocationListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Initialize Firestore
         db = FirebaseFirestore.getInstance();
 
-        // Retrieve the current user from FirebaseAuth and get displayName.
+        // Possibly get displayName from FirebaseAuth
         FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
         if (currentUser != null && currentUser.getDisplayName() != null) {
             displayName = currentUser.getDisplayName();
         }
 
-        // Configure OSMdroid and set layout.
+        // OSMdroid config
         Configuration.getInstance().load(this, PreferenceManager.getDefaultSharedPreferences(this));
         setContentView(R.layout.activity_gps);
 
+        // Use today's date as doc ID
+        currentSessionId = new SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(new Date());
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putString(KEY_SESSION_ID, currentSessionId);
+        editor.apply();
+
+        // Disable Start button until Firestore loads
+        buttonStartStop = findViewById(R.id.buttonStartStop);
+        buttonStartStop.setEnabled(false);
+
+        // Initialize daily record from Firestore (UI will be updated in its callback)
+        initializeDailyRecord();
+
         checkAndResetDataIfNewDay();
 
-        // Initialize UI components.
-        mapView = findViewById(R.id.mapView);
+        // UI references
         textDistanceValue = findViewById(R.id.textDistanceValue);
         textTimeValue = findViewById(R.id.textTimeValue);
         textStepsValue = findViewById(R.id.textStepsValue);
         textCarbonEmission = findViewById(R.id.textCarbonEmission);
         progressSteps = findViewById(R.id.progressSteps);
-        buttonStartStop = findViewById(R.id.buttonStartStop);
         spinnerTransportMode = findViewById(R.id.spinnerTransportMode);
 
-        // Setup spinner.
         ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(
                 this, R.array.transport_modes, android.R.layout.simple_spinner_item);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinnerTransportMode.setAdapter(adapter);
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+
         int savedModeIndex = prefs.getInt(KEY_SELECTED_MODE_INDEX, 0);
         spinnerTransportMode.setSelection(savedModeIndex);
         selectedMode = TransportMode.values()[savedModeIndex];
@@ -190,32 +216,24 @@ public class GPS extends AppCompatActivity implements LocationListener {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 selectedMode = TransportMode.values()[position];
-                SharedPreferences.Editor editor = prefs.edit();
-                editor.putInt(KEY_SELECTED_MODE_INDEX, position);
-                editor.apply();
+                SharedPreferences.Editor ed = prefs.edit();
+                ed.putInt(KEY_SELECTED_MODE_INDEX, position);
+                ed.apply();
                 updateStats();
             }
             @Override
             public void onNothingSelected(AdapterView<?> parent) { }
         });
 
-        // Setup map.
+        mapView = findViewById(R.id.mapView);
         mapView.setTileSource(TileSourceFactory.MAPNIK);
         mapView.setMultiTouchControls(true);
+
         locationOverlay = new MyLocationNewOverlay(new GpsMyLocationProvider(this), mapView);
-        locationOverlay.enableMyLocation();
-        locationOverlay.enableFollowLocation();
-        locationOverlay.runOnFirstFix(() -> runOnUiThread(() -> {
-            IGeoPoint currentLocation = locationOverlay.getMyLocation();
-            if (currentLocation != null) {
-                zoomToLocation(currentLocation.getLatitude(), currentLocation.getLongitude(), 19.0);
-            }
-        }));
         Bitmap largeIcon = BitmapFactory.decodeResource(getResources(), R.drawable.custom_marker);
         Bitmap scaledIcon = Bitmap.createScaledBitmap(largeIcon, 64, 64, true);
         locationOverlay.setPersonIcon(scaledIcon);
         locationOverlay.setPersonHotspot(32f, 32f);
-        mapView.getOverlays().add(locationOverlay);
 
         polyline = new Polyline();
         polyline.setWidth(5f);
@@ -228,35 +246,14 @@ public class GPS extends AppCompatActivity implements LocationListener {
         routeLine.setPoints(Collections.emptyList());
         mapView.getOverlayManager().add(routeLine);
 
-        // Map touch listener to add a quest marker.
-        mapView.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP) {
-                if (trackingState == TrackingState.RUNNING) return true;
-                GeoPoint touchedPoint = (GeoPoint) mapView.getProjection().fromPixels((int) event.getX(), (int) event.getY());
-                Marker questMarker = new Marker(mapView);
-                Bitmap questIconLarge = BitmapFactory.decodeResource(getResources(), R.drawable.custom_quest_icon);
-                Bitmap questIconScaled = Bitmap.createScaledBitmap(questIconLarge, 48, 48, true);
-                BitmapDrawable questDrawable = new BitmapDrawable(getResources(), questIconScaled);
-                questMarker.setIcon(questDrawable);
-                questMarker.setTitle("New Quest!");
-                questMarker.setSubDescription("Walk here to earn bonus points!");
-                questMarker.setPosition(touchedPoint);
-                mapView.getOverlays().add(questMarker);
-                mapView.invalidate();
-                return true;
-            }
-            return false;
-        });
-
-        // Add compass and scale bar overlays.
         CompassOverlay compassOverlay = new CompassOverlay(this, mapView);
         compassOverlay.enableCompass();
         mapView.getOverlays().add(compassOverlay);
+
         ScaleBarOverlay scaleBarOverlay = new ScaleBarOverlay(mapView);
         scaleBarOverlay.setAlignRight(true);
         mapView.getOverlays().add(scaleBarOverlay);
 
-        // Setup location manager and permissions.
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         requestLocationPermission();
 
@@ -265,9 +262,9 @@ public class GPS extends AppCompatActivity implements LocationListener {
             backArrow.setOnClickListener(v -> finish());
         }
 
-        loadSessionData();
+        // Note: We removed the immediate call to loadSessionData() here.
+        // Instead, the UI is updated by the Firestore callback in initializeDailyRecord().
 
-        // Register broadcast receiver for tracking updates.
         IntentFilter filter = new IntentFilter("com.example.walktracker.TRACKING_UPDATE");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(trackingUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -275,7 +272,7 @@ public class GPS extends AppCompatActivity implements LocationListener {
             registerReceiver(trackingUpdateReceiver, filter);
         }
 
-        // Updated start button behavior:
+        // Start/Stop button
         buttonStartStop.setOnClickListener(v -> {
             if (trackingState == TrackingState.RUNNING) {
                 pauseTracking();
@@ -284,9 +281,9 @@ public class GPS extends AppCompatActivity implements LocationListener {
             } else {
                 if (trackingState == TrackingState.STOPPED) {
                     startTracking();
-                    isRewardGiven = false;
-                    // Create or update Firestore document immediately with the current (starting) stats
-                    createInitialTrackingRecord();
+                    if (!recordExistsInFirestore) {
+                        createInitialTrackingRecord();
+                    }
                 } else {
                     resumeTracking();
                 }
@@ -299,28 +296,113 @@ public class GPS extends AppCompatActivity implements LocationListener {
         });
     }
 
-    // Helper method to convert dp to pixels.
-    private int dpToPx(int dp) {
-        float scale = getResources().getDisplayMetrics().density;
-        return (int) (dp * scale + 0.5f);
+    /**
+     * Query Firestore for today's doc. If it exists, load data, sync it to SharedPreferences,
+     * and then refresh the UI.
+     */
+    private void initializeDailyRecord() {
+        final String todayId = currentSessionId;
+        db.collection("Games")
+                .document(displayName)
+                .collection("trackingwalk")
+                .document(todayId)
+                .get()
+                .addOnSuccessListener(documentSnapshot -> {
+                    dailyRecordInitialized = true;
+                    if (documentSnapshot.exists()) {
+                        recordExistsInFirestore = true;
+                        loadDataFromFirestore(documentSnapshot);
+                        // Sync the fetched values to SharedPreferences:
+                        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                        SharedPreferences.Editor editor = prefs.edit();
+                        editor.putFloat(KEY_TOTAL_DISTANCE, totalDistance);
+                        editor.putLong(KEY_ACCUMULATED_TIME, accumulatedActiveTime);
+                        editor.apply();
+                    } else {
+                        recordExistsInFirestore = false;
+                    }
+                    updateStartButtonText();
+                    buttonStartStop.setEnabled(true);
+                    // Now update the UI with the (synced) session data.
+                    loadSessionData();
+                })
+                .addOnFailureListener(e -> {
+                    Log.e(TAG, "Error checking today's record: " + e.getMessage());
+                    dailyRecordInitialized = true;
+                    recordExistsInFirestore = false;
+                    updateStartButtonText();
+                    buttonStartStop.setEnabled(true);
+                    loadSessionData();
+                });
     }
 
-    private void checkAndResetDataIfNewDay() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        long lastDateMillis = prefs.getLong(KEY_LAST_DATE, 0);
-        Calendar calCurrent = Calendar.getInstance();
-        int currentDay = calCurrent.get(Calendar.DAY_OF_YEAR);
-        Calendar calLast = Calendar.getInstance();
-        calLast.setTimeInMillis(lastDateMillis);
-        int lastDay = calLast.get(Calendar.DAY_OF_YEAR);
-        if (lastDateMillis == 0 || currentDay != lastDay) {
-            clearSessionData();
-            SharedPreferences.Editor editor = prefs.edit();
-            editor.putLong(KEY_LAST_DATE, System.currentTimeMillis());
-            editor.apply();
+    /**
+     * Load data from Firestore (including accumulatedActiveTime) into local variables.
+     */
+    private void loadDataFromFirestore(DocumentSnapshot document) {
+        String distanceStr = document.getString("distanceSoFarKm");
+        String timeStr = document.getString("time");
+        Long steps = document.getLong("stepsSoFar");
+        Long activeTime = document.getLong("accumulatedActiveTime");
+
+        if (distanceStr != null) {
+            textDistanceValue.setText(distanceStr);
+            try {
+                totalDistance = Float.parseFloat(distanceStr) * 1000;
+            } catch (NumberFormatException e) {
+                totalDistance = 0;
+            }
+        }
+        if (timeStr != null) {
+            textTimeValue.setText(timeStr);
+        }
+        if (steps != null) {
+            textStepsValue.setText(String.valueOf(steps));
+            progressSteps.setProgress(Math.min(steps.intValue(), GOAL_STEPS));
+        }
+        if (activeTime != null) {
+            accumulatedActiveTime = activeTime;
         }
     }
 
+    /**
+     * If recordExistsInFirestore and local counters > 0, show "RESUME". Else "START".
+     */
+    private void updateStartButtonText() {
+        if (recordExistsInFirestore && (accumulatedActiveTime > 0 || totalDistance > 0)) {
+            buttonStartStop.setText("RESUME");
+        } else {
+            buttonStartStop.setText("START");
+        }
+    }
+
+    private void checkAndResetDataIfNewDay() {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            long lastDateMillis = prefs.getLong(KEY_LAST_DATE, 0);
+            Calendar calCurrent = Calendar.getInstance();
+            int currentDay = calCurrent.get(Calendar.DAY_OF_YEAR);
+            Calendar calLast = Calendar.getInstance();
+            calLast.setTimeInMillis(lastDateMillis);
+            int lastDay = calLast.get(Calendar.DAY_OF_YEAR);
+
+            if (lastDateMillis == 0 || currentDay != lastDay) {
+                Log.d(TAG, "New day—reset local session data.");
+                clearSessionData();
+                SharedPreferences.Editor editor = prefs.edit();
+                editor.putLong(KEY_LAST_DATE, System.currentTimeMillis());
+                editor.apply();
+            } else {
+                Log.d(TAG, "Same day—no reset needed.");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error in checkAndResetDataIfNewDay: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Request location permission if not granted.
+     */
     private void requestLocationPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -330,17 +412,13 @@ public class GPS extends AppCompatActivity implements LocationListener {
                     REQUEST_LOCATION_PERMISSION
             );
         } else {
-            requestLocationUpdates();
+            refreshMap();
         }
     }
 
-    private void requestLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000, 1, this);
-        }
-    }
-
+    /**
+     * Called when user responds to permission dialog.
+     */
     @Override
     public void onRequestPermissionsResult(int requestCode,
                                            @NonNull String[] permissions,
@@ -348,34 +426,91 @@ public class GPS extends AppCompatActivity implements LocationListener {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_LOCATION_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                refreshMap();
                 requestLocationUpdates();
             } else {
-                Toast.makeText(this, "Location permission is required for tracking.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Location permission required for tracking.", Toast.LENGTH_SHORT).show();
             }
         }
     }
 
+    /**
+     * Refresh map if permission is granted.
+     */
+    private void refreshMap() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            locationOverlay.enableMyLocation();
+            locationOverlay.enableFollowLocation();
+            locationOverlay.runOnFirstFix(() -> runOnUiThread(() -> {
+                IGeoPoint currentLocation = locationOverlay.getMyLocation();
+                if (currentLocation != null) {
+                    zoomToLocation(currentLocation.getLatitude(), currentLocation.getLongitude(), 19.0);
+                }
+            }));
+            if (!mapView.getOverlays().contains(locationOverlay)) {
+                mapView.getOverlays().add(locationOverlay);
+            }
+            mapView.invalidate();
+        }
+    }
+
+    /**
+     * Request location updates if permission is granted.
+     */
+    private void requestLocationUpdates() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            try {
+                locationManager.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER,
+                        2000,
+                        1,
+                        this
+                );
+            } catch (Exception e) {
+                Log.e(TAG, "Error requesting location updates: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Convert dp to px for button sizing.
+     */
+    private int dpToPx(int dp) {
+        float scale = getResources().getDisplayMetrics().density;
+        return (int) (dp * scale + 0.5f);
+    }
+
+    /**
+     * Only reset local counters if they are zero.
+     */
     private void startTracking() {
         trackingState = TrackingState.RUNNING;
-        totalDistance = 0;
-        locations.clear();
-        polyline.setPoints(new ArrayList<>());
-        textDistanceValue.setText("0");
-        textTimeValue.setText("00:00");
-        textStepsValue.setText("0");
-        progressSteps.setProgress(0);
-        textCarbonEmission.setText("CO₂ saved: 0 kg");
-        accumulatedActiveTime = 0;
+        if (totalDistance == 0 && accumulatedActiveTime == 0 && locations.isEmpty()) {
+            totalDistance = 0;
+            accumulatedActiveTime = 0;
+            locations.clear();
+            polyline.setPoints(new ArrayList<>());
+            textDistanceValue.setText("0");
+            textTimeValue.setText("00:00");
+            textStepsValue.setText("0");
+            progressSteps.setProgress(0);
+            textCarbonEmission.setText("CO₂ saved: 0 kg");
+        }
         sessionStartTime = System.currentTimeMillis();
         isBadgePopupShown = false;
-        isRewardGiven = false;
         requestLocationUpdates();
     }
 
     private void pauseTracking() {
         trackingState = TrackingState.PAUSED;
         accumulatedActiveTime += (System.currentTimeMillis() - sessionStartTime);
-        locationManager.removeUpdates(this);
+        try {
+            locationManager.removeUpdates(this);
+        } catch (Exception e) {
+            Log.e(TAG, "Error removing location updates: " + e.getMessage());
+        }
         saveSessionData();
     }
 
@@ -385,10 +520,14 @@ public class GPS extends AppCompatActivity implements LocationListener {
         requestLocationUpdates();
     }
 
+    /**
+     * Called on location updates.
+     */
     @Override
     public void onLocationChanged(@NonNull Location location) {
         if (trackingState != TrackingState.RUNNING) return;
         if (location.hasAccuracy() && location.getAccuracy() > ACCURACY_THRESHOLD) return;
+
         if (!locations.isEmpty()) {
             Location lastLocation = locations.get(locations.size() - 1);
             float distanceDelta = lastLocation.distanceTo(location);
@@ -408,288 +547,361 @@ public class GPS extends AppCompatActivity implements LocationListener {
     }
 
     private void updatePolyline() {
-        List<GeoPoint> geoPoints = new ArrayList<>();
-        for (Location loc : locations) {
-            geoPoints.add(new GeoPoint(loc.getLatitude(), loc.getLongitude()));
+        try {
+            List<GeoPoint> geoPoints = new ArrayList<>();
+            for (Location loc : locations) {
+                geoPoints.add(new GeoPoint(loc.getLatitude(), loc.getLongitude()));
+            }
+            polyline.setPoints(geoPoints);
+            mapView.invalidate();
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating polyline: " + e.getMessage());
         }
-        polyline.setPoints(geoPoints);
-        mapView.invalidate();
     }
 
     private void applyGradientToText(TextView textView, int startColor, int endColor) {
-        textView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        float textHeight = textView.getTextSize();
-        Shader textShader = new LinearGradient(0, 0, 0, textHeight,
-                new int[]{startColor, endColor}, null, Shader.TileMode.CLAMP);
-        textView.getPaint().setShader(textShader);
-        textView.invalidate();
-    }
-
-    private void updateStats() {
-        long elapsedTime = accumulatedActiveTime;
-        if (trackingState == TrackingState.RUNNING) {
-            elapsedTime += (System.currentTimeMillis() - sessionStartTime);
-        }
-        int totalSeconds = (int) (elapsedTime / 1000);
-        int minutes = totalSeconds / 60;
-        int seconds = totalSeconds % 60;
-        double distanceKm = totalDistance / 1000.0;
-        String distanceString = String.format("%.2f", distanceKm);
-        String timeString = String.format("%02d:%02d", minutes, seconds);
-
-        int realStepCount = (int)(distanceKm * STEPS_PER_KM);
-        textStepsValue.setText(String.valueOf(realStepCount));
-        progressSteps.setProgress(Math.min(realStepCount, GOAL_STEPS));
-
-        double emissionFactor;
-        String modeText;
-        switch (selectedMode) {
-            case CAR:
-                emissionFactor = EMISSION_FACTOR_CAR;
-                modeText = "car";
-                break;
-            case BUS:
-                emissionFactor = EMISSION_FACTOR_BUS;
-                modeText = "bus";
-                break;
-            case MOTORCYCLE:
-                emissionFactor = EMISSION_FACTOR_MOTORCYCLE;
-                modeText = "motorcycle";
-                break;
-            case JEEPNEY:
-                emissionFactor = EMISSION_FACTOR_JEEPNEY;
-                modeText = "jeepney";
-                break;
-            case TRUCK:
-                emissionFactor = EMISSION_FACTOR_TRUCK;
-                modeText = "truck";
-                break;
-            default:
-                emissionFactor = EMISSION_FACTOR_CAR;
-                modeText = "car";
-                break;
-        }
-        double emissionSaved = distanceKm * emissionFactor;
-        textCarbonEmission.setText(String.format("Walking saved %.2f kg CO₂ vs. using a %s.", emissionSaved, modeText));
-
-        textDistanceValue.setText(distanceString);
-        textTimeValue.setText(timeString);
-
-        int startColor = Color.parseColor("#00215E");
-        int endColor = Color.parseColor("#2C4E80");
-        applyGradientToText(textDistanceValue, startColor, endColor);
-        applyGradientToText(textTimeValue, startColor, endColor);
-        applyGradientToText(textStepsValue, startColor, endColor);
-
-        // If goal reached and not rewarded yet, store record.
-        if (realStepCount >= GOAL_STEPS && !isRewardGiven) {
-            isRewardGiven = true;
-            showBadgePopup();
-            storeTrackingRecord(distanceString, timeString, emissionSaved, selectedMode.name().toLowerCase(), realStepCount);
+        try {
+            textView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+            float textHeight = textView.getTextSize();
+            Shader textShader = new LinearGradient(0, 0, 0, textHeight,
+                    new int[]{startColor, endColor}, null, Shader.TileMode.CLAMP);
+            textView.getPaint().setShader(textShader);
+            textView.invalidate();
+        } catch (Exception e) {
+            Log.e(TAG, "Error applying gradient: " + e.getMessage());
         }
     }
 
     /**
-     * Create or update the Firestore record immediately when tracking starts.
-     * This records the exact starting values.
+     * Recompute UI from local counters (accumulatedActiveTime, totalDistance).
+     */
+    private void updateStats() {
+        try {
+            long elapsedTime = accumulatedActiveTime;
+            if (trackingState == TrackingState.RUNNING) {
+                elapsedTime += (System.currentTimeMillis() - sessionStartTime);
+            }
+            int totalSeconds = (int) (elapsedTime / 1000);
+            int minutes = totalSeconds / 60;
+            int seconds = totalSeconds % 60;
+            double distanceKm = totalDistance / 1000.0;
+            String distanceString = String.format(Locale.getDefault(), "%.2f", distanceKm);
+            String timeString = String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds);
+
+            int realStepCount = (int) (distanceKm * STEPS_PER_KM);
+            if (realStepCount >= GOAL_STEPS) {
+                realStepCount = GOAL_STEPS;
+            }
+            textStepsValue.setText(String.valueOf(realStepCount));
+            progressSteps.setProgress(Math.min(realStepCount, GOAL_STEPS));
+
+            // Determine emission factor based on selectedMode
+            double emissionFactor;
+            String modeText;
+            switch (selectedMode) {
+                case CAR:
+                    emissionFactor = EMISSION_FACTOR_CAR;
+                    modeText = "car";
+                    break;
+                case BUS:
+                    emissionFactor = EMISSION_FACTOR_BUS;
+                    modeText = "bus";
+                    break;
+                case MOTORCYCLE:
+                    emissionFactor = EMISSION_FACTOR_MOTORCYCLE;
+                    modeText = "motorcycle";
+                    break;
+                case JEEPNEY:
+                    emissionFactor = EMISSION_FACTOR_JEEPNEY;
+                    modeText = "jeepney";
+                    break;
+                case TRUCK:
+                    emissionFactor = EMISSION_FACTOR_TRUCK;
+                    modeText = "truck";
+                    break;
+                default:
+                    emissionFactor = EMISSION_FACTOR_CAR;
+                    modeText = "car";
+                    break;
+            }
+            double emissionSaved = distanceKm * emissionFactor;
+            textCarbonEmission.setText(String.format(Locale.getDefault(),
+                    "Walking saved %.2f kg CO₂ vs. using a %s.", emissionSaved, modeText));
+
+            textDistanceValue.setText(distanceString);
+            textTimeValue.setText(timeString);
+
+            int startColor = Color.parseColor("#00215E");
+            int endColor = Color.parseColor("#2C4E80");
+            applyGradientToText(textDistanceValue, startColor, endColor);
+            applyGradientToText(textTimeValue, startColor, endColor);
+            applyGradientToText(textStepsValue, startColor, endColor);
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating stats: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Create a new Firestore record for today if none exists, including co2Comparison fields.
      */
     private void createInitialTrackingRecord() {
-        String dateDocId = new SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(new Date());
-        int pointsEarned = 0;
-        double distanceKm = totalDistance / 1000.0;  // should be 0 at start
-        int steps = (int)(distanceKm * STEPS_PER_KM);
-        String timeString = "00:00"; // At start, elapsed time is zero
+        try {
+            if (currentSessionId == null) {
+                currentSessionId = new SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(new Date());
+            }
+            double distanceKm = totalDistance / 1000.0;
+            int steps = (int) (distanceKm * STEPS_PER_KM);
+            String timeString = String.format(Locale.getDefault(), "%02d:%02d", 0, 0);
 
-        double emissionFactor;
-        String modeText;
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        int savedModeIndex = prefs.getInt(KEY_SELECTED_MODE_INDEX, 0);
-        selectedMode = TransportMode.values()[savedModeIndex];
-        switch (selectedMode) {
-            case CAR:
-                emissionFactor = EMISSION_FACTOR_CAR;
-                modeText = "car";
-                break;
-            case BUS:
-                emissionFactor = EMISSION_FACTOR_BUS;
-                modeText = "bus";
-                break;
-            case MOTORCYCLE:
-                emissionFactor = EMISSION_FACTOR_MOTORCYCLE;
-                modeText = "motorcycle";
-                break;
-            case JEEPNEY:
-                emissionFactor = EMISSION_FACTOR_JEEPNEY;
-                modeText = "jeepney";
-                break;
-            case TRUCK:
-                emissionFactor = EMISSION_FACTOR_TRUCK;
-                modeText = "truck";
-                break;
-            default:
-                emissionFactor = EMISSION_FACTOR_CAR;
-                modeText = "car";
-                break;
+            double emissionFactor;
+            String modeText;
+            switch (selectedMode) {
+                case CAR:
+                    emissionFactor = EMISSION_FACTOR_CAR; modeText = "car"; break;
+                case BUS:
+                    emissionFactor = EMISSION_FACTOR_BUS; modeText = "bus"; break;
+                case MOTORCYCLE:
+                    emissionFactor = EMISSION_FACTOR_MOTORCYCLE; modeText = "motorcycle"; break;
+                case JEEPNEY:
+                    emissionFactor = EMISSION_FACTOR_JEEPNEY; modeText = "jeepney"; break;
+                case TRUCK:
+                    emissionFactor = EMISSION_FACTOR_TRUCK; modeText = "truck"; break;
+                default:
+                    emissionFactor = EMISSION_FACTOR_CAR; modeText = "car"; break;
+            }
+            double co2Saved = distanceKm * emissionFactor;
+
+            // Also compute your comparison fields
+            String co2ComparisonBus = "CO₂ saved from walk compared to bus: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
+            String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
+            String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
+            String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("date", currentSessionId);
+            data.put("distanceSoFarKm", String.format(Locale.getDefault(), "%.2f", distanceKm));
+            data.put("time", timeString);
+            data.put("co2Saved", co2Saved);
+            data.put("mode", modeText);
+            data.put("stepsSoFar", steps);
+            data.put("pointsEarned", 0);
+            data.put("timestamp", FieldValue.serverTimestamp());
+
+            // Include raw active time
+            data.put("accumulatedActiveTime", accumulatedActiveTime);
+
+            // Comparison fields
+            data.put("co2ComparisonBus", co2ComparisonBus);
+            data.put("co2ComparisonJeepney", co2ComparisonJeepney);
+            data.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
+            data.put("co2ComparisonTruck", co2ComparisonTruck);
+
+            db.collection("Games")
+                    .document(displayName)
+                    .collection("trackingwalk")
+                    .document(currentSessionId)
+                    .set(data)
+                    .addOnSuccessListener(aVoid -> {
+                        Toast.makeText(GPS.this, "Session started! Tracking record created.", Toast.LENGTH_SHORT).show();
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "Failed to create tracking record: " + e.getMessage());
+                        Toast.makeText(GPS.this, "Failed to create tracking record.", Toast.LENGTH_SHORT).show();
+                    });
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in createInitialTrackingRecord: " + e.getMessage());
         }
-        double co2Saved = distanceKm * emissionFactor;
-
-        String co2ComparisonBus = "CO₂ saved from walk compared to bus: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
-        String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
-        String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
-        String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("distanceSoFarKm", String.format("%.2f", distanceKm));
-        data.put("time", timeString);
-        data.put("co2Saved", co2Saved);
-        data.put("mode", modeText);
-        data.put("stepsSoFar", steps);
-        data.put("pointsEarned", pointsEarned);
-        data.put("co2ComparisonBus", co2ComparisonBus);
-        data.put("co2ComparisonJeepney", co2ComparisonJeepney);
-        data.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
-        data.put("co2ComparisonTruck", co2ComparisonTruck);
-        data.put("timestamp", FieldValue.serverTimestamp());
-
-        db.collection("Games")
-                .document(displayName)  // Use displayName as document ID.
-                .collection("trackingwalk")
-                .document(dateDocId)
-                .set(data)
-                .addOnSuccessListener(aVoid -> {
-                    Toast.makeText(GPS.this, "Session started! Tracking record created.", Toast.LENGTH_SHORT).show();
-                })
-                .addOnFailureListener(e -> {
-                    Toast.makeText(GPS.this, "Failed to create tracking record: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                });
     }
 
     /**
-     * Store the tracking record in Firestore when the goal is reached.
+     * Merge new data (including co2Comparison fields) into today's doc.
      */
     private void storeTrackingRecord(String distance, String time, double co2Saved, String mode, int steps) {
-        String dateDocId = new SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(new Date());
-        int pointsEarned = 100;
+        try {
+            int pointsEarned = 100;
 
-        double distanceKm = totalDistance / 1000.0;
-        String co2ComparisonBus = "CO₂ saved from walk compared to bus: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
-        String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
-        String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
-        String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " + String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
+            double distanceKm = totalDistance / 1000.0;
 
-        Map<String, Object> data = new HashMap<>();
-        data.put("distanceSoFarKm", distance);
-        data.put("time", time);
-        data.put("co2Saved", co2Saved);
-        data.put("mode", mode);
-        data.put("stepsSoFar", steps);
-        data.put("pointsEarned", pointsEarned);
-        data.put("co2ComparisonBus", co2ComparisonBus);
-        data.put("co2ComparisonJeepney", co2ComparisonJeepney);
-        data.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
-        data.put("co2ComparisonTruck", co2ComparisonTruck);
-        data.put("timestamp", FieldValue.serverTimestamp());
+            // Also compute your comparison fields
+            String co2ComparisonBus = "CO₂ saved from walk compared to bus: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_BUS);
+            String co2ComparisonJeepney = "CO₂ saved from walk compared to Jeepney: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_JEEPNEY);
+            String co2ComparisonMotorcycle = "CO₂ saved from walk compared to Motorcycle: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_MOTORCYCLE);
+            String co2ComparisonTruck = "CO₂ saved from walk compared to Truck: " +
+                    String.format("%.2fkg", distanceKm * EMISSION_FACTOR_TRUCK);
 
-        db.collection("Games")
-                .document(displayName)
-                .collection("trackingwalk")
-                .document(dateDocId)
-                .set(data)
-                .addOnSuccessListener(aVoid -> {
-                    Toast.makeText(GPS.this, "Goal reached! Session record saved.", Toast.LENGTH_SHORT).show();
-                    db.collection("Games")
-                            .document(displayName)
-                            .update("highScore", FieldValue.increment(pointsEarned))
-                            .addOnSuccessListener(unused -> {
-                                Toast.makeText(GPS.this, "HighScore updated!", Toast.LENGTH_SHORT).show();
-                            })
-                            .addOnFailureListener(e -> {
-                                Toast.makeText(GPS.this, "Failed to update highScore: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                            });
-                })
-                .addOnFailureListener(e -> {
-                    Toast.makeText(GPS.this, "Failed to save session record: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                });
+            Map<String, Object> data = new HashMap<>();
+            data.put("distanceSoFarKm", distance);
+            data.put("time", time);
+            data.put("co2Saved", co2Saved);
+            data.put("mode", mode);
+            data.put("stepsSoFar", steps);
+            data.put("pointsEarned", pointsEarned);
+            data.put("timestamp", FieldValue.serverTimestamp());
+
+            // Also store raw active time
+            data.put("accumulatedActiveTime", accumulatedActiveTime);
+
+            // Comparison fields
+            data.put("co2ComparisonBus", co2ComparisonBus);
+            data.put("co2ComparisonJeepney", co2ComparisonJeepney);
+            data.put("co2ComparisonMotorcycle", co2ComparisonMotorcycle);
+            data.put("co2ComparisonTruck", co2ComparisonTruck);
+
+            db.collection("Games")
+                    .document(displayName)
+                    .collection("trackingwalk")
+                    .document(currentSessionId)
+                    .set(data, SetOptions.merge())
+                    .addOnSuccessListener(aVoid -> {
+                        Toast.makeText(GPS.this, "Goal reached! Session record saved.", Toast.LENGTH_SHORT).show();
+                        db.collection("Games")
+                                .document(displayName)
+                                .update("highScore", FieldValue.increment(pointsEarned))
+                                .addOnSuccessListener(unused -> {
+                                    Toast.makeText(GPS.this, "HighScore updated!", Toast.LENGTH_SHORT).show();
+                                })
+                                .addOnFailureListener(e -> {
+                                    Log.e(TAG, "Failed to update highScore: " + e.getMessage());
+                                    Toast.makeText(GPS.this, "Failed to update highScore.", Toast.LENGTH_SHORT).show();
+                                });
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "Failed to save session record: " + e.getMessage());
+                        Toast.makeText(GPS.this, "Failed to save session record.", Toast.LENGTH_SHORT).show();
+                    });
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in storeTrackingRecord: " + e.getMessage());
+        }
     }
 
     private void zoomToLocation(double latitude, double longitude, double zoomLevel) {
-        mapView.getController().setZoom(zoomLevel);
-        mapView.getController().setCenter(new GeoPoint(latitude, longitude));
+        try {
+            mapView.getController().setZoom(zoomLevel);
+            mapView.getController().setCenter(new GeoPoint(latitude, longitude));
+        } catch (Exception e) {
+            Log.e(TAG, "Error zooming to location: " + e.getMessage());
+        }
     }
 
     private void showBadgePopup() {
-        Dialog dialog = new Dialog(this);
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        dialog.setContentView(R.layout.popup_badge_earned);
-        dialog.setCancelable(false);
-        TextView textBadgeLabel = dialog.findViewById(R.id.textBadgeLabel);
-        TextView textTitle = dialog.findViewById(R.id.textTitle);
-        TextView textSubMessage = dialog.findViewById(R.id.textSubMessage);
-        Button buttonContinue = dialog.findViewById(R.id.buttonContinue);
-        textBadgeLabel.setText("Gold Star Badge");
-        textTitle.setText("Well done!");
-        textSubMessage.setText("You’ve earned the Gold Star Badge for tracking your travel!");
-        buttonContinue.setOnClickListener(v -> dialog.dismiss());
-        dialog.show();
+        try {
+            Dialog dialog = new Dialog(this);
+            dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            dialog.setContentView(R.layout.popup_badge_earned);
+            dialog.setCancelable(false);
+
+            TextView textBadgeLabel = dialog.findViewById(R.id.textBadgeLabel);
+            TextView textTitle = dialog.findViewById(R.id.textTitle);
+            TextView textSubMessage = dialog.findViewById(R.id.textSubMessage);
+            Button buttonContinue = dialog.findViewById(R.id.buttonContinue);
+
+            textBadgeLabel.setText("Gold Star Badge");
+            textTitle.setText("Well done!");
+            textSubMessage.setText("You’ve earned the Gold Star Badge for tracking your travel!");
+            buttonContinue.setOnClickListener(v -> dialog.dismiss());
+            dialog.show();
+        } catch (Exception e) {
+            Log.e(TAG, "Error showing badge popup: " + e.getMessage());
+        }
     }
 
+    /**
+     * Save local counters to SharedPreferences so we can restore them later.
+     */
     private void saveSessionData() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
-        int stateValue;
-        switch (trackingState) {
-            case RUNNING: stateValue = 1; break;
-            case PAUSED:  stateValue = 2; break;
-            default:      stateValue = 0; break;
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+
+            int stateValue;
+            switch (trackingState) {
+                case RUNNING: stateValue = 1; break;
+                case PAUSED:  stateValue = 2; break;
+                default:      stateValue = 0; break;
+            }
+            editor.putInt(KEY_TRACKING_STATE, stateValue);
+            editor.putFloat(KEY_TOTAL_DISTANCE, totalDistance);
+            editor.putLong(KEY_ACCUMULATED_TIME, accumulatedActiveTime);
+            editor.apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving session data: " + e.getMessage());
         }
-        editor.putInt(KEY_TRACKING_STATE, stateValue);
-        editor.putFloat(KEY_TOTAL_DISTANCE, totalDistance);
-        editor.putLong(KEY_ACCUMULATED_TIME, accumulatedActiveTime);
-        editor.apply();
     }
 
+    /**
+     * Load local counters from SharedPreferences.
+     */
     private void loadSessionData() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        int stateValue = prefs.getInt(KEY_TRACKING_STATE, 0);
-        if (stateValue == 1) {
-            trackingState = TrackingState.RUNNING;
-            buttonStartStop.setText("PAUSE");
-        } else if (stateValue == 2) {
-            trackingState = TrackingState.PAUSED;
-            buttonStartStop.setText("RESUME");
-        } else {
-            trackingState = TrackingState.STOPPED;
-            buttonStartStop.setText("START");
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            int stateValue = prefs.getInt(KEY_TRACKING_STATE, 0);
+
+            if (stateValue == 1) {
+                trackingState = TrackingState.RUNNING;
+                buttonStartStop.setText("PAUSE");
+            } else if (stateValue == 2) {
+                trackingState = TrackingState.PAUSED;
+                buttonStartStop.setText("RESUME");
+            } else {
+                trackingState = TrackingState.STOPPED;
+                buttonStartStop.setText("START");
+            }
+
+            totalDistance = prefs.getFloat(KEY_TOTAL_DISTANCE, 0f);
+            accumulatedActiveTime = prefs.getLong(KEY_ACCUMULATED_TIME, 0L);
+
+            double distanceKm = totalDistance / 1000.0;
+            int realStepCount = (int) (distanceKm * STEPS_PER_KM);
+            textStepsValue.setText(String.valueOf(realStepCount));
+            progressSteps.setProgress(Math.min(realStepCount, GOAL_STEPS));
+
+            int totalSec = (int) (accumulatedActiveTime / 1000);
+            int minutes = totalSec / 60;
+            int seconds = totalSec % 60;
+            textDistanceValue.setText(String.format(Locale.getDefault(), "%.2f", distanceKm));
+            textTimeValue.setText(String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds));
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading session data: " + e.getMessage());
         }
-        totalDistance = prefs.getFloat(KEY_TOTAL_DISTANCE, 0f);
-        accumulatedActiveTime = prefs.getLong(KEY_ACCUMULATED_TIME, 0L);
-
-        double distanceKm = totalDistance / 1000.0;
-        int realStepCount = (int)(distanceKm * STEPS_PER_KM);
-        textStepsValue.setText(String.valueOf(realStepCount));
-        progressSteps.setProgress(Math.min(realStepCount, GOAL_STEPS));
-
-        int totalSec = (int)(accumulatedActiveTime / 1000);
-        int minutes = totalSec / 60;
-        int seconds = totalSec % 60;
-        textDistanceValue.setText(String.format("%.2f", distanceKm));
-        textTimeValue.setText(String.format("%02d:%02d", minutes, seconds));
     }
 
+    /**
+     * Clear only local data, not Firestore.
+     */
     private void clearSessionData() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
-        editor.remove(KEY_TRACKING_STATE);
-        editor.remove(KEY_TOTAL_DISTANCE);
-        editor.remove(KEY_ACCUMULATED_TIME);
-        editor.apply();
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.remove(KEY_TRACKING_STATE);
+            editor.remove(KEY_TOTAL_DISTANCE);
+            editor.remove(KEY_ACCUMULATED_TIME);
+            editor.apply();
+
+            totalDistance = 0;
+            accumulatedActiveTime = 0;
+            locations.clear();
+            isBadgePopupShown = false;
+        } catch (Exception e) {
+            Log.e(TAG, "Error clearing session data: " + e.getMessage());
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         saveSessionData();
-        unregisterReceiver(trackingUpdateReceiver);
+        try {
+            unregisterReceiver(trackingUpdateReceiver);
+        } catch (Exception e) {
+            Log.e(TAG, "Error unregistering receiver: " + e.getMessage());
+        }
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
@@ -697,21 +909,35 @@ public class GPS extends AppCompatActivity implements LocationListener {
     protected void onResume() {
         super.onResume();
         checkAndResetDataIfNewDay();
-        loadSessionData();
-        IntentFilter filter = new IntentFilter("com.example.walktracker.TRACKING_UPDATE");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(trackingUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(trackingUpdateReceiver, filter);
+        // Instead of calling loadSessionData() immediately (which may load zeros), we refresh via Firestore:
+        initializeDailyRecord();
+        refreshMap();
+        try {
+            IntentFilter filter = new IntentFilter("com.example.walktracker.TRACKING_UPDATE");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(trackingUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(trackingUpdateReceiver, filter);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error registering receiver on resume: " + e.getMessage());
         }
     }
 
     private void startTrackingService() {
-        Intent serviceIntent = new Intent(this, TrackingService.class);
-        ContextCompat.startForegroundService(this, serviceIntent);
+        try {
+            Intent serviceIntent = new Intent(this, TrackingService.class);
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting TrackingService: " + e.getMessage());
+        }
     }
 
     private void stopTrackingService() {
-        stopService(new Intent(this, TrackingService.class));
+        try {
+            stopService(new Intent(this, TrackingService.class));
+        } catch (Exception e) {
+            Log.e(TAG, "Error stopping TrackingService: " + e.getMessage());
+        }
     }
 }

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notification_layout"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="8dp"
+    android:background="@color/dark_blue">
+
+    <!-- Display elapsed time -->
+    <TextView
+        android:id="@+id/textTime"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Time: 00:00"
+        android:textSize="16sp"
+        android:textColor="@android:color/white" />
+
+    <!-- Display distance -->
+    <TextView
+        android:id="@+id/textDistance"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Distance: 0.00 km"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:layout_below="@id/textTime"
+        android:layout_marginTop="4dp" />
+
+    <!-- Display step count, aligned to the right -->
+    <TextView
+        android:id="@+id/textSteps"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Steps: 0"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentRight="true" />
+
+    <!-- Display CO₂ saved, below the step count -->
+    <TextView
+        android:id="@+id/textCO2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="CO₂: 0.00 kg"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:layout_below="@id/textSteps"
+        android:layout_marginTop="4dp"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentRight="true" />
+
+</RelativeLayout>
