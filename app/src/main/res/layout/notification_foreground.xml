@@ -27,27 +27,33 @@
         android:layout_marginTop="4dp" />
 
     <!-- Display step count, aligned to the right -->
+
+    <!-- Display CO₂ saved, below the step count -->
+
     <TextView
         android:id="@+id/textSteps"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Steps: 0"
-        android:textSize="16sp"
-        android:textColor="@android:color/white"
         android:layout_alignParentEnd="true"
-        android:layout_alignParentRight="true" />
+        android:layout_alignParentRight="true"
+        android:layout_marginEnd="104dp"
+        android:layout_marginRight="104dp"
+        android:text="Steps: 0"
+        android:textColor="@android:color/white"
+        android:textSize="16sp" />
 
-    <!-- Display CO₂ saved, below the step count -->
     <TextView
         android:id="@+id/textCO2"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="CO₂: 0.00 kg"
-        android:textSize="16sp"
-        android:textColor="@android:color/white"
         android:layout_below="@id/textSteps"
-        android:layout_marginTop="4dp"
         android:layout_alignParentEnd="true"
-        android:layout_alignParentRight="true" />
+        android:layout_alignParentRight="true"
+        android:layout_marginTop="4dp"
+        android:layout_marginEnd="85dp"
+        android:layout_marginRight="85dp"
+        android:text="CO₂: 0.00 kg"
+        android:textColor="@android:color/white"
+        android:textSize="16sp" />
 
 </RelativeLayout>
